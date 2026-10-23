@@ -54,12 +54,12 @@ public interface TeleotherDiscordWebhookConfig extends Config
 	@ConfigItem(
 		keyName = "customMessage",
 		name = "Custom Message",
-		description = "The message structure sent to Discord. Use {player} for your name, {target} for the target name, and {destination} for the location.",
+		description = "The message structure sent to Discord. Use %player% for your name, %target% for the target name, and %destination% for the location.",
 		position = 4,
 		section = discordSection
 	)
 	default String customMessage()
 	{
-		return "**{player}** successfully teleothered **{target}** to **{destination}**!";
+		return "**%player%** successfully teleothered **%target%** to **%destination%**!";
 	}
 }

@@ -1,20 +1,17 @@
 package com.teleother;
 
-import com.google.common.base.Strings;
 import com.google.inject.Provides;
 
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
-import javax.imageio.ImageIO;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
@@ -25,10 +22,11 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.Player;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.PluginMessage;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.ui.DrawManager;
 import net.runelite.client.util.Text;
 
 import okhttp3.*;
@@ -45,10 +43,7 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 	private Client client;
 
 	@Inject
-	private DrawManager drawManager;
-
-	@Inject
-	private OkHttpClient okHttpClient;
+    protected EventBus eventBus;
 
 	@Inject
 	private TeleotherDiscordWebhookConfig config;
@@ -69,9 +64,8 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event) {
 		if (event.getMenuAction() == MenuAction.WIDGET_TARGET_ON_PLAYER) {
-			if (client.getSelectedWidget() == null) {
+			if (client.getSelectedWidget() == null)
 				return;
-			}
 
 			String spellName = client.getSelectedWidget().getName();
 			if (spellName == null || !spellName.contains("Teleother")) {
@@ -139,7 +133,7 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 			DiscordWebhook pending = iterator.next();
 
 			if (--pending.ticksRemaining <= 0) {
-				sendWebhook(
+				sendToDink(
 						pending.targetPlayerName,
 						pending.teleportDestination);
 				iterator.remove();
@@ -155,78 +149,28 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 		});
 	}
 
-	private void sendWebhook(String targetName, String destination) {
-		String configUrl = config.webhookUrl();
-		if (Strings.isNullOrEmpty(configUrl)) {
-			return;
-		}
+	private void sendToDink(String targetName, String destination) {
+		HashMap<String, Object> data = new HashMap<>();
+        data.put("text", config.customMessage());
+		data.put("title", "Teleother");
+        data.put("sourcePlugin", "Teleother");
+        data.put("imageRequested", config.includeScreenshot());
+		data.put("replacements", Map.of("%player%", Map.of("value", getPlayerName()), "%target%", Map.of("value", targetName), "%destination%", Map.of("value", destination)));
+        if (config.webhookUrl() != null && !config.webhookUrl().isEmpty()) {
+            List<HttpUrl> httpUrls = Arrays.stream(config.webhookUrl().split(";")).map(HttpUrl::parse).collect(Collectors.toList());
+            data.put("urls", httpUrls);
+        }
 
-		HttpUrl url = HttpUrl.parse(configUrl);
+        log.debug("Sending dink notification with data: {}", data);
 
+        eventBus.post(new PluginMessage("dink", "notify", data));
+	}
+
+	private String getPlayerName(){
 		Player localPlayer = client.getLocalPlayer();
 		String localPlayerName = (localPlayer != null && localPlayer.getName() != null)
 				? Text.sanitize(Text.removeTags(localPlayer.getName()))
 				: "Someone";
-
-		String template = config.customMessage();
-		String contentMessage = template
-				.replace("{player}", localPlayerName)
-				.replace("{target}", targetName)
-				.replace("{destination}", destination);
-
-		MultipartBody.Builder requestBodyBuilder = new MultipartBody.Builder()
-				.setType(MultipartBody.FORM)
-				.addFormDataPart("content", contentMessage);
-
-		if (config.includeScreenshot())
-			sendWebhookWithScreenshot(url, requestBodyBuilder);
-		else
-			buildRequestAndSend(url, requestBodyBuilder);
-	}
-
-	private void sendWebhookWithScreenshot(HttpUrl url, MultipartBody.Builder requestBodyBuilder) {
-		drawManager.requestNextFrameListener(image -> {
-			BufferedImage bufferedImage = (BufferedImage) image;
-			byte[] imageBytes;
-			try {
-				imageBytes = convertImageToByteArray(bufferedImage);
-			} catch (IOException e) {
-				log.error("Error converting image to byte array", e);
-				return;
-			}
-
-			requestBodyBuilder.addFormDataPart("file", "image.png",
-					RequestBody.create(MediaType.parse("image/png"), imageBytes));
-			buildRequestAndSend(url, requestBodyBuilder);
-		});
-	}
-
-	private void buildRequestAndSend(HttpUrl url, MultipartBody.Builder requestBodyBuilder) {
-		RequestBody requestBody = requestBodyBuilder.build();
-		Request request = new Request.Builder()
-				.url(url)
-				.post(requestBody)
-				.build();
-		sendRequest(request);
-	}
-
-	private void sendRequest(Request request) {
-		okHttpClient.newCall(request).enqueue(new Callback() {
-			@Override
-			public void onFailure(Call call, IOException e) {
-				log.error("Error submitting webhook", e);
-			}
-
-			@Override
-			public void onResponse(Call call, Response response) throws IOException {
-				response.close();
-			}
-		});
-	}
-
-	private static byte[] convertImageToByteArray(BufferedImage bufferedImage) throws IOException {
-		ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-		ImageIO.write(bufferedImage, "png", byteArrayOutputStream);
-		return byteArrayOutputStream.toByteArray();
+		return localPlayerName;
 	}
 }
