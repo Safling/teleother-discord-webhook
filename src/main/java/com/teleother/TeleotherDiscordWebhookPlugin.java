@@ -97,6 +97,8 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 
 			if (Duration.between(castTime, Instant.now()).toSeconds() < TELEPORT_OFFER_TIMEOUT_SECONDS) {
 				log.debug("{} accepted teleother from {}", actor.getName(), getLocalPlayerName());
+				setOverheadText(client.getLocalPlayer(), replacePlaceholders(config.playerMessage(), actor.getName()));
+				setOverheadText(actor, replacePlaceholders(config.targetMessage(), actor.getName()));
 				queueNotification(actor.getName());
 			}
 		}
@@ -104,6 +106,14 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 
 	private boolean isLocalPlayer(Actor actor) {
 		return actor != null && actor.getName() != null && actor.getName().equals(getLocalPlayerName());
+	}
+
+	private void setOverheadText(Actor actor, String message) {
+		if (actor == null || message == null || message.isEmpty())
+			return;
+
+		actor.setOverheadText(message);
+		actor.setOverheadCycle(5 * 1000 / Constants.CLIENT_TICK_LENGTH);
 	}
 
 	private void queueNotification(String actorName) {

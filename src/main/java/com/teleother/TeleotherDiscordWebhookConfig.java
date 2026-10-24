@@ -58,5 +58,35 @@ public interface TeleotherDiscordWebhookConfig extends Config
 	{
 		return "**%player%** successfully teleothered **%target%**!";
 	}
+
+	@ConfigSection(
+		name = "Overhead",
+		description = "Settings for overhead messages",
+		position = 1
+	)
+	String overheadSection = "overheadSection";
+
+	@ConfigItem(
+		keyName = "targetMessage",
+		name = "Target Message",
+		description = "The message shown above the targets character. Use %player% for your name, %target% for the target name.",
+		position = 6,
+		section = overheadSection
+	)
+	default String targetMessage()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "playerMessage",
+		name = "Player Message",
+		description = "The message shown above your character. Use %player% for your name, %target% for the target name.",
+		position = 7,
+		section = overheadSection
+	)
+	default String playerMessage()
+	{
+		return "";
 	}
 }
