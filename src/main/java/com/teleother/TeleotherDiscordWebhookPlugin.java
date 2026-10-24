@@ -4,7 +4,6 @@ import com.google.inject.Provides;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -16,10 +15,9 @@ import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
-import net.runelite.api.MenuAction;
+import net.runelite.api.Constants;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.GameTick;
-import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.Player;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
@@ -27,15 +25,16 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.PluginMessage;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.util.Text;
 
-import okhttp3.*;
+import okhttp3.HttpUrl;
 
 @Slf4j
 @PluginDescriptor(name = "Teleother Discord Webhook", description = "Sends a message / screenshot to a discord webhook when you teleother someone", tags = {
 		"teleport", "other", "discord", "webhook" })
 public class TeleotherDiscordWebhookPlugin extends Plugin {
 	private static final int ACCEPT_TELEOTHER = 1816;
+	private static final int CAST_TELEOTHER = 1818;
+	// Delay the screenshot by 2 ticks, so we capture the teleport animation
 	private static final int SCREENSHOT_DELAY_TICKS = 2;
 	private static final long TELEPORT_OFFER_TIMEOUT_SECONDS = 60;
 
@@ -43,7 +42,7 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 	private Client client;
 
 	@Inject
-    protected EventBus eventBus;
+	protected EventBus eventBus;
 
 	@Inject
 	private TeleotherDiscordWebhookConfig config;
@@ -53,73 +52,76 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 		return configManager.getConfig(TeleotherDiscordWebhookConfig.class);
 	}
 
-	private final Map<String, TeleotherCast> pendingTeleothers = new HashMap<>();
-	private final List<DiscordWebhook> pendingScreenshots = new ArrayList<>();
+	private final Map<String, Instant> offersQueue = new HashMap<>();
+	private final Map<String, Integer> notificationQueue = new HashMap<>();
+	private String playerName = null;
 
 	@Override
 	protected void shutDown() throws Exception {
-		pendingTeleothers.clear();
-	}
-
-	@Subscribe
-	public void onMenuOptionClicked(MenuOptionClicked event) {
-		if (event.getMenuAction() == MenuAction.WIDGET_TARGET_ON_PLAYER) {
-			if (client.getSelectedWidget() == null)
-				return;
-
-			String spellName = client.getSelectedWidget().getName();
-			if (spellName == null || !spellName.contains("Teleother")) {
-				return;
-			}
-
-			String cleanSpellName = Text.sanitize(Text.removeTags(spellName));
-			String destination = cleanSpellName.replace("Teleother ", "").trim();
-
-			String rawTarget = Text.sanitize(Text.removeTags(event.getMenuTarget()));
-			String targetName = rawTarget;
-
-			if (rawTarget.contains("->")) {
-				String rightSide = rawTarget.split("->")[1].trim();
-
-				if (rightSide.contains("(")) {
-					targetName = rightSide.split("\\(")[0].trim();
-				} else {
-					targetName = rightSide;
-				}
-			}
-
-			pendingTeleothers.put(targetName, new TeleotherCast(Instant.now(), destination));
-		}
+		offersQueue.clear();
 	}
 
 	@Subscribe
 	public void onAnimationChanged(AnimationChanged event) {
 		Actor actor = event.getActor();
-		if (actor == null || actor.getName() == null) {
+		if (actor == null || actor.getName() == null)
 			return;
+
+		switch (actor.getAnimation()) {
+			case CAST_TELEOTHER:
+				onCastTeleother(actor);
+				break;
+			case ACCEPT_TELEOTHER:
+				onAcceptTeleother(actor);
+				break;
 		}
+	}
 
-		String actorName = Text.sanitize(Text.removeTags(actor.getName()));
+	private void onCastTeleother(Actor actor) {
+		if (actor == null || !isLocalPlayer(actor))
+			return;
 
-		if (pendingTeleothers.containsKey(actorName)) {
-			if (actor.getAnimation() == ACCEPT_TELEOTHER) {
-				TeleotherCast offer = pendingTeleothers.get(actorName);
+		Actor target = actor.getInteracting();
+		if (target != null && target instanceof Player) {
+			log.debug("{} cast teleother on {}", getLocalPlayerName(), target.getName());
+			offersQueue.put(target.getName(), Instant.now());
+		}
+	}
 
-				if (Duration.between(offer.castAt, Instant.now()).toSeconds() < 60) {
-					handleTeleother(actorName, offer);
-				}
+	private void onAcceptTeleother(Actor actor) {
+		if (actor == null || isLocalPlayer(actor))
+			return;
+
+		if (offersQueue.containsKey(actor.getName())) {
+			Instant castTime = offersQueue.get(actor.getName());
+
+			if (Duration.between(castTime, Instant.now()).toSeconds() < TELEPORT_OFFER_TIMEOUT_SECONDS) {
+				log.debug("{} accepted teleother from {}", actor.getName(), getLocalPlayerName());
+				setOverheadText(client.getLocalPlayer(), replacePlaceholders(config.playerMessage(), actor.getName()));
+				setOverheadText(actor, replacePlaceholders(config.targetMessage(), actor.getName()));
+				queueNotification(actor.getName());
 			}
 		}
 	}
 
-	private void handleTeleother(String actorName, TeleotherCast offer) {
-		pendingTeleothers.remove(actorName);
+	private boolean isLocalPlayer(Actor actor) {
+		return actor != null && actor.getName() != null && actor.getName().equals(getLocalPlayerName());
+	}
+
+	private void setOverheadText(Actor actor, String message) {
+		if (actor == null || message == null || message.isEmpty())
+			return;
+
+		actor.setOverheadText(message);
+		actor.setOverheadCycle(5 * 1000 / Constants.CLIENT_TICK_LENGTH);
+	}
+
+	private void queueNotification(String actorName) {
+		offersQueue.remove(actorName);
 		if (!config.enableWebhook() || config.webhookUrl().isEmpty())
 			return;
 
-		pendingScreenshots.add(
-				new DiscordWebhook(getDiscordDelay(), actorName,
-						offer.teleportDestination));
+		notificationQueue.put(actorName, getDiscordDelay());
 	}
 
 	private int getDiscordDelay() {
@@ -128,49 +130,62 @@ public class TeleotherDiscordWebhookPlugin extends Plugin {
 
 	@Subscribe
 	public void onGameTick(GameTick event) {
-		Iterator<DiscordWebhook> iterator = pendingScreenshots.iterator();
+		Iterator<Map.Entry<String, Integer>> iterator = notificationQueue.entrySet().iterator();
 		while (iterator.hasNext()) {
-			DiscordWebhook pending = iterator.next();
+			Map.Entry<String, Integer> entry = iterator.next();
+			String targetName = entry.getKey();
+			int ticksRemaining = entry.getValue() - 1;
 
-			if (--pending.ticksRemaining <= 0) {
-				sendToDink(
-						pending.targetPlayerName,
-						pending.teleportDestination);
+			if (ticksRemaining <= 0) {
+				sendToDink(targetName);
 				iterator.remove();
+			} else {
+				entry.setValue(ticksRemaining);
 			}
 		}
-		if (pendingTeleothers.isEmpty()) {
+		if (offersQueue.isEmpty()) {
 			return;
 		}
 
 		Instant now = Instant.now();
-		pendingTeleothers.entrySet().removeIf(entry -> {
-			return Duration.between(entry.getValue().castAt, now).toSeconds() > TELEPORT_OFFER_TIMEOUT_SECONDS;
+		offersQueue.entrySet().removeIf(entry -> {
+			return Duration.between(entry.getValue(), now).toSeconds() > TELEPORT_OFFER_TIMEOUT_SECONDS;
 		});
 	}
 
-	private void sendToDink(String targetName, String destination) {
-		HashMap<String, Object> data = new HashMap<>();
-        data.put("text", config.customMessage());
-		data.put("title", "Teleother");
-        data.put("sourcePlugin", "Teleother");
-        data.put("imageRequested", config.includeScreenshot());
-		data.put("replacements", Map.of("%player%", Map.of("value", getPlayerName()), "%target%", Map.of("value", targetName), "%destination%", Map.of("value", destination)));
-        if (config.webhookUrl() != null && !config.webhookUrl().isEmpty()) {
-            List<HttpUrl> httpUrls = Arrays.stream(config.webhookUrl().split(";")).map(HttpUrl::parse).collect(Collectors.toList());
-            data.put("urls", httpUrls);
-        }
+	private String getLocalPlayerName() {
+		if (playerName != null)
+			return playerName;
 
-        log.debug("Sending dink notification with data: {}", data);
+		Player player = client.getLocalPlayer();
+		if (player == null || player.getName() == null)
+			return "Someone";
 
-        eventBus.post(new PluginMessage("dink", "notify", data));
+		playerName = player.getName();
+		return playerName;
 	}
 
-	private String getPlayerName(){
-		Player localPlayer = client.getLocalPlayer();
-		String localPlayerName = (localPlayer != null && localPlayer.getName() != null)
-				? Text.sanitize(Text.removeTags(localPlayer.getName()))
-				: "Someone";
-		return localPlayerName;
+	private String replacePlaceholders(String message, String targetName) {
+		if (message == null || message.isEmpty())
+			return "";
+
+		return message.replace("%player%", getLocalPlayerName()).replace("%target%", targetName);
+	}
+
+	private void sendToDink(String targetName) {
+		HashMap<String, Object> data = new HashMap<>();
+		data.put("text",  replacePlaceholders(config.customMessage(), targetName));
+		data.put("title", "Teleother");
+		data.put("sourcePlugin", "Teleother");
+		data.put("imageRequested", config.includeScreenshot());
+		if (config.webhookUrl() != null && !config.webhookUrl().isEmpty()) {
+			List<HttpUrl> httpUrls = Arrays.stream(config.webhookUrl().split(";")).map(HttpUrl::parse)
+					.collect(Collectors.toList());
+			data.put("urls", httpUrls);
+		}
+
+		log.debug("sending notification to dink");
+
+		eventBus.post(new PluginMessage("dink", "notify", data));
 	}
 }

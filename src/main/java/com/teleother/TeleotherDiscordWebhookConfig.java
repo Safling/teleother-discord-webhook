@@ -19,7 +19,6 @@ public interface TeleotherDiscordWebhookConfig extends Config
 		keyName = "enableWebhook",
 		name = "Enable Webhook",
 		description = "Toggles sending messages to Discord",
-		position = 1,
 		section = discordSection
 	)
 	default boolean enableWebhook()
@@ -31,7 +30,6 @@ public interface TeleotherDiscordWebhookConfig extends Config
 		keyName = "webhookUrl",
 		name = "Webhook URL",
 		description = "Paste your Discord server webhook URL here",
-		position = 2,
 		section = discordSection
 	)
 	default String webhookUrl()
@@ -43,7 +41,6 @@ public interface TeleotherDiscordWebhookConfig extends Config
 		keyName = "includeScreenshot",
 		name = "Include Screenshot",
 		description = "Toggle whether to capture and upload a screenshot to Discord",
-		position = 3,
 		section = discordSection
 	)
 	default boolean includeScreenshot()
@@ -54,12 +51,42 @@ public interface TeleotherDiscordWebhookConfig extends Config
 	@ConfigItem(
 		keyName = "customMessage",
 		name = "Custom Message",
-		description = "The message structure sent to Discord. Use %player% for your name, %target% for the target name, and %destination% for the location.",
-		position = 4,
+		description = "The message structure sent to Discord. Use %player% for your name, %target% for the target name.",
 		section = discordSection
 	)
 	default String customMessage()
 	{
-		return "**%player%** successfully teleothered **%target%** to **%destination%**!";
+		return "**%player%** successfully teleothered **%target%**!";
+	}
+
+	@ConfigSection(
+		name = "Overhead",
+		description = "Settings for overhead messages",
+		position = 1
+	)
+	String overheadSection = "overheadSection";
+
+	@ConfigItem(
+		keyName = "targetMessage",
+		name = "Target Message",
+		description = "The message shown above the targets character. Use %player% for your name, %target% for the target name.",
+		position = 6,
+		section = overheadSection
+	)
+	default String targetMessage()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "playerMessage",
+		name = "Player Message",
+		description = "The message shown above your character. Use %player% for your name, %target% for the target name.",
+		position = 7,
+		section = overheadSection
+	)
+	default String playerMessage()
+	{
+		return "";
 	}
 }
